@@ -13,6 +13,7 @@ import { Loader2 } from 'lucide-react';
 import { IoClose } from "react-icons/io5";
 import { TiTick, TiTickOutline } from 'react-icons/ti';
 import { RxDotsVertical } from "react-icons/rx";
+import db from "@/dbConfig/indexedDb";
 
 
 
@@ -137,42 +138,46 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
 
 
 
-    useEffect(() => {
-        const fetchChatHistory = async () => {
-
-            try {
-                setHistoryLoading(true)
-                const response = await axios.get('/api/users/getchathistory', {
-                    params: { chatId }
-                });
-
-                if (response.data.success) {
-                    setMessages(response.data.chatHistory);
-
-
-                    setUniqueChatId(response.data.uniqueChatId.toString())
-                    // console.log("is group", response.data.isGroup);
-
-                    setIsGroup(response.data.isGroup)
-
-                    if (response.data.isMyChatOpen == user._id) {
-                        setInChat(true)
-                    } else {
-                        setInChat(false)
-                    }
-
-
-                } else {
-                    setError(response.data.message);
-                }
-            } catch (error) {
-                setError('Error fetching chat history');
-            } finally {
-
-                setHistoryLoading(false)
+    const fetchChatHistory = async () => {
+        try {
+            setHistoryLoading(true);
+    
+            // Pehle IndexedDB me cache check karo
+            const cachedMessages = await db.messages.where("chatId").equals(chatId).toArray();
+      
+            if (cachedMessages.length > 0) {
+                console.log("Loaded from IndexedDB");
+                 setMessages(cachedMessages);
+                setHistoryLoading(false);
+                 return;
             }
-        };
-
+    
+            // Agar cache me nahi mila, toh API call karo
+            const response = await axios.get('/api/users/getchathistory', { params: { chatId } });
+    
+            if (response.data.success) {
+               
+                setMessages(response.data.chatHistory);
+    
+                // **IndexedDB me cache store karo**
+                await db.messages.bulkPut(response.data.chatHistory.map(msg => ({
+                    id: msg._id,  
+                    chatId: chatId,
+                    ...msg  // Sare fields automatically add ho jayenge
+                })));
+                
+            } else {
+                setError(response.data.message);
+            }
+        } catch (error) {
+            setError('Error fetching chat history');
+        } finally {
+            setHistoryLoading(false);
+        }
+    };
+    
+    useEffect(() => {
+        if (!chatId) return;
         fetchChatHistory();
     }, [chatId]);
 
@@ -206,16 +211,30 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
 
         // Subscribe to the private channel to receive messages
         const msgChannel = pusher.subscribe(`private-${uniqueChatId}`);
-        msgChannel.bind('newmsg', function (data) {
-
-            const { msgId,message, msgSenderId, username, videodata, replyMsg } = data;
+        msgChannel.bind('newmsg', async function (data) {
+            const { msgId, message, msgSenderId, username, videodata, replyMsg } = data;
+        
             if (msgSenderId !== user._id) {
-                setMessages((prevMessages) => [...prevMessages, {_id:msgId , edited:false, sender: { _id: chatId, username }, repliedContent: replyMsg, content: message, videodata, timestamp: new Date() }]);
+                const newMessage = {
+                    _id: msgId,   // Same as original `_id`
+                    id: msgId,   // IndexedDB ke liye bhi same ID rakh rahe
+                    chatId: chatId,
+                    sender: { _id: msgSenderId, username }, // Same as Pusher data
+                    edited: false, // Default false
+                    repliedContent: replyMsg, // Reply message maintain rakha
+                    content: message,
+                    videodata: videodata, // Agar video ho toh save ho sake
+                    timestamp: new Date(),
+                };
+        
+                // **UI me add karo**
+                setMessages((prevMessages) => [...prevMessages, newMessage]);
+        
+                // **IndexedDB me bhi save karo**
+                await db.messages.put(newMessage);
             }
-          
-            
-
         });
+        
         const statusChannel = pusher.subscribe(`private-${uniqueChatId}`);
         // console.log("frontend pr unique id :",uniqueChatId);
         const statusUpdateChannel = pusher.subscribe(`private-${chatId}`);
@@ -244,36 +263,46 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
 
         })
 
-        statusChannel.bind('msgstatusUpdate', function (data) {
-            setMessages(data.updatedMessages)
-        })
-        statusChannel.bind('messagesDelete', function (data) {
-            const { msgId } = data
-
-            setMessages((prev) => prev.filter((prevObj) => prevObj._id !== msgId))
-        })
-        statusChannel.bind('messagesEdit', function (data) {
-            // console.log("m edit msg k andr huuu");
+        statusChannel.bind('msgstatusUpdate', async function (data) {
+            setMessages(data.updatedMessages);
+        
+            // IndexedDB me status update karo
+            for (const updatedMsg of data.updatedMessages) {
+                await db.messages.update(updatedMsg._id, { msgStatus: updatedMsg.msgStatus });
+            }
+        });
+        
+        statusChannel.bind('messagesDelete', async function (data) {
+            const { msgId } = data;
+        
+            setMessages((prev) => prev.filter((prevObj) => prevObj._id !== msgId));
+        
+            // IndexedDB se bhi delete karo
+            await db.messages.delete(msgId);
+        });
+        
+        statusChannel.bind('messagesEdit', async function (data) {
+               // console.log("m edit msg k andr huuu");
+            const { msgId, msgContent } = data;
+         
             
-            const { msgId, msgContent } = data
+           
             // console.log("ye hai bhai msgId jo backend se aayi hai ab m match kraunga" ,msgId );
             // console.log("aur edit k baad m ye content kr dunga " ,msgContent );
             // console.log("abhi ye hai bhai messages edit se pahle ", messages);
-            setMessages((prev) => prev.map((prevObj) => {
-                if (prevObj._id == msgId) {
-                    return {
-                        ...prevObj,
-                        content: msgContent,
-                        edited: true,
-                        timestamp: new Date()
-                    }
-                }
-                return prevObj
-            }))
+            setMessages((prev) =>
+                prev.map((prevObj) =>
+                    prevObj._id === msgId
+                        ? { ...prevObj, content: msgContent, edited: true, timestamp: new Date() }
+                        : prevObj
+                )
+            );
+        
+            // IndexedDB me bhi update karo
+            await db.messages.update(msgId, { content: msgContent, edited: true, timestamp: new Date() });
+        
             console.log("ab ye hi bhai messages edit k baad to ", messages);
-            
-        })
-
+        });
         // Cleanup function to unsubscribe from Pusher channels
         return () => {
             // globalPresenceChannel.unbind_all();
@@ -291,34 +320,62 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
 
     // const isInChat = onlineUsers[chatId] !== undefined;
     const sendMessage = async (data) => {
-        // Generate a temporary ID for the message (just an example using Date.now)
-        const tempMsgId = Date.now();
+        const tempMsgId = Date.now();  // Temporary ID
+    
         try {
-
-
-            // Add the sent message to the messages array
-            setMessages((prevMessages) => [...prevMessages, { sender: { _id: user._id }, _id: tempMsgId, videoData: undefined, msgStatus: isChatVisible && inChat ? 'read' : isChatVisible ? 'delivered' : 'sent', repliedContent: { msgId: replyMsg.msgId, content: replyMsg.content }, content: userTyping, timestamp: new Date() }]);
-            setUserTyping('')
-
-            let response = await axios.post("/api/users/sendmessages", { message: data.chatMessage, replyMsg, chatId, msgStatus: isChatVisible && inChat ? 'read' : isChatVisible ? 'delivered' : 'sent' });
-
+            // Optimistic UI Update
+            const tempMessage = {
+                id: tempMsgId,
+                chatId: chatId,
+                sender: { _id: user._id }, 
+                _id: tempMsgId,  
+                videoData: undefined, 
+                msgStatus: isChatVisible && inChat ? 'read' : isChatVisible ? 'delivered' : 'sent',
+                repliedContent: { msgId: replyMsg.msgId, content: replyMsg.content },  
+                content: userTyping,
+                timestamp: new Date(),
+            };
+    
+            setMessages((prevMessages) => [...prevMessages, tempMessage]);
+            setUserTyping('');
+    
+            // IndexedDB me save karo (optimistic update)
+            await db.messages.put(tempMessage);
+    
+            // API Call
+            let response = await axios.post("/api/users/sendmessages", { 
+                message: data.chatMessage, 
+                replyMsg,
+                chatId, 
+                msgStatus: tempMessage.msgStatus
+            });
+    
+            // Message ka actual ID update karo IndexedDB me
+            await db.messages.update(tempMsgId, { id: response.data.msgId, _id: response.data.msgId });
+    
+            // UI me update karo
+            setMessages((prevMessages) =>
+                prevMessages.map(msg =>
+                    msg.id === tempMsgId ? { ...msg, id: response.data.msgId, _id: response.data.msgId } : msg
+                )
+            );
+    
+            // Reply message reset karo
             setReplyMsg({
                 msgId: '',
                 content: ''
-            })
-
-            setMessages((prevMessages) =>
-                prevMessages.map(msg =>
-                    msg._id === tempMsgId ? { ...msg, _id: response.data.msgId } : msg
-                )
-            );
-
+            });
+    
         } catch (error) {
             console.error("Error sending message:", error);
-            // Optionally, remove the optimistically added message in case of failure
-            setMessages((prevMessages) => prevMessages.filter(msg => msg._id !== tempMsgId));
+    
+            // Agar fail ho jaye, toh optimistic message remove karo
+            setMessages((prevMessages) => prevMessages.filter(msg => msg.id !== tempMsgId));
+            await db.messages.delete(tempMsgId);
         }
     };
+    
+    
 
     const removeFrnd = async (deleteGroup) => {
         try {
@@ -340,46 +397,55 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
     }
 
     const deleteMsgForBoth = async (msgId) => {
-        setMessages((prev) => prev.filter((prevObj) => prevObj._id !== msgId))
-        setUpdateMsgPopup(false)
-        let response = await axios.post("/api/users/deletemsg", { chatId, msgId })
-
-
-    }
+        setMessages((prev) => prev.filter((prevObj) => prevObj._id !== msgId));
+        setUpdateMsgPopup(false);
+    
+        // IndexedDB se bhi delete karo
+        await db.messages.delete(msgId);
+    
+        // Server request
+        await axios.post("/api/users/deletemsg", { chatId, msgId });
+    };
+    
     const deleteMsgForMe = async (msgId) => {
-        setMessages((prev) => prev.map((prevObj) => {
-            if (prevObj._id == msgId) {
-                return {
-                    ...prevObj,
-                    delForMe: true
-                }
-            }
-            return prevObj
-
-        }))
-        setUpdateMsgPopup(false)
-        let response = await axios.post("/api/users/deletemsgforme", { chatId, msgId })
-
-
-    }
+        setMessages((prev) =>
+            prev.map((prevObj) =>
+                prevObj._id === msgId ? { ...prevObj, delForMe: true } : prevObj
+            )
+        );
+        setUpdateMsgPopup(false);
+    
+        // IndexedDB me bhi update karo (sirf delForMe flag change karenge)
+        await db.messages.update(msgId, { delForMe: true });
+    
+        // Server request
+        await axios.post("/api/users/deletemsgforme", { chatId, msgId });
+    };
+    
     const editMsg = async (data) => {
-        setMessages((prev) => prev.map((prevObj) => {
-            if (prevObj._id == isMsgEditableId) {
-                return {
-                    ...prevObj,
-                    content: userTyping,
-                    edited: true,
-                    timestamp: new Date()
-                }
-            }
-            return prevObj
-        }))
-        setUserTyping('')
-        setEditedContent('')
-        let response = await axios.post("/api/users/editmsg", { chatId, msgId: isMsgEditableId, msgContent: data.chatMessage })
-        setIsMsgEditableId(null)
-
-    }
+        setMessages((prev) =>
+            prev.map((prevObj) =>
+                prevObj._id === isMsgEditableId
+                    ? { ...prevObj, content: userTyping, edited: true, timestamp: new Date() }
+                    : prevObj
+            )
+        );
+    
+        // IndexedDB me bhi update karna
+        await db.messages.update(isMsgEditableId, {
+            content: userTyping,
+            edited: true,
+            timestamp: new Date(),
+        });
+    
+        setUserTyping('');
+        setEditedContent('');
+        setIsMsgEditableId(null);
+    
+        // Server request
+        await axios.post("/api/users/editmsg", { chatId, msgId: isMsgEditableId, msgContent: data.chatMessage });
+    };
+    
 
 
     const handleReplyMsgClick = (replyId) => {
@@ -484,16 +550,16 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
                     <div className="text-center text-red-400">{error}</div>
                 ) : (
                     messages.map((msg, index) => (
-                        <div id={`reply-${index}`} key={index} className={`${msg.sender._id === user._id && msg.delForMe ? "hidden" : ''} flex flex-col mb-2   ${highlightedReplyId === `reply-${index}` ? 'bg-yellow-200' : ''}`}>
+                        <div id={`reply-${index}`} key={index} className={`${msg.sender?._id === user._id && msg.delForMe ? "hidden" : ''} flex flex-col mb-2   ${highlightedReplyId === `reply-${index}` ? 'bg-yellow-200' : ''}`}>
 
                             <div
 
-                                className={`relative flex ${msg.sender._id === user._id ? 'justify-end' : 'justify-start'}`}
+                                className={`relative flex ${msg.sender?._id === user._id ? 'justify-end' : 'justify-start'}`}
                             >
 
                                 <div className={`flex flex-col border-2 border-slate-500 rounded-lg max-w-[50%]`}>
                                     {
-                                        msg.repliedContent.content && (
+                                        msg.repliedContent?.content && (
                                             <div onClick={() => handleReplyMsgClick(msg._id)} className='cursor-pointer text-sm text-ellipsis break-words'>
                                                 <p>{msg.repliedContent.content}</p>
                                             </div>
@@ -537,7 +603,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
                                     )}
 
                                     <div
-                                        className={`relative p-3 rounded-lg shadow-lg ${msg.sender._id === user._id ? 'bg-blue-500 text-white' : 'bg-gray-700 text-gray-100 '}`}
+                                        className={`relative p-3 rounded-lg shadow-lg ${msg.sender?._id === user._id ? 'bg-blue-500 text-white' : 'bg-gray-700 text-gray-100 '}`}
 
                                     >
                                      
