@@ -148,6 +148,8 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
             if (cachedMessages.length > 0) {
                 console.log("Loaded from IndexedDB");
                  setMessages(cachedMessages);
+                 setUniqueChatId(cachedMessages.uniqueChatId);
+                 setIsGroup(cachedMessages.isGroup);
                 setHistoryLoading(false);
                  return;
             }
@@ -158,11 +160,17 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
             if (response.data.success) {
                
                 setMessages(response.data.chatHistory);
+                  setUniqueChatId(response.data.uniqueChatId.toString())
+                    // console.log("is group", response.data.isGroup);
+
+                    setIsGroup(response.data.isGroup)
     
                 // **IndexedDB me cache store karo**
                 await db.messages.bulkPut(response.data.chatHistory.map(msg => ({
                     id: msg._id,  
                     chatId: chatId,
+                    uniqueChatId: response.data.uniqueChatId.toString(),
+                    isGroup: response.data.isGroup,
                     ...msg  // Sare fields automatically add ho jayenge
                 })));
                 
@@ -216,16 +224,14 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
         
             if (msgSenderId !== user._id) {
                 const newMessage = {
-                    _id: msgId,   // Same as original `_id`
-                    id: msgId,   // IndexedDB ke liye bhi same ID rakh rahe
-                    chatId: chatId,
-                    sender: { _id: msgSenderId, username }, // Same as Pusher data
-                    edited: false, // Default false
-                    repliedContent: replyMsg, // Reply message maintain rakha
+                    _id: msgId,
+                    edited: false,
+                    sender: { _id: chatId, username }, // Yahi exact same structure hona chaiye
+                    repliedContent: replyMsg,
                     content: message,
-                    videodata: videodata, // Agar video ho toh save ho sake
+                    videodata,
                     timestamp: new Date(),
-                };
+                  };
         
                 // **UI me add karo**
                 setMessages((prevMessages) => [...prevMessages, newMessage]);
