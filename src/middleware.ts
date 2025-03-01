@@ -13,7 +13,7 @@ export async function middleware(request: NextRequest) {
 
 
    // Allow access to public routes without authentication
-   const publicPaths = ['/','/sign-in', '/sign-up', '/verify', '/forgetpassword'];
+   const publicPaths = ['/sign-in', '/sign-up', '/verify', '/forgetpassword'];
    const isPublicPath = publicPaths.some((path) => url.pathname.startsWith(path));
    
  
