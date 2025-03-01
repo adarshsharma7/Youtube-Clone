@@ -1,11 +1,12 @@
 import Dexie from 'dexie';
 
-// Database create karo
+// ✅ Database create karo
 const db = new Dexie("ChatDatabase");
 
-// Chat messages ke liye ek store define karo
-db.version(1).stores({
-    messages: "++id, chatId, content, senderId, timestamp" // id auto-increment hoga
+// ✅ Version update karke dono tables add karo
+db.version(2).stores({
+    messages: "++id, chatId, content, senderId, timestamp", // Messages store
+    chats: "chatId, uniqueChatId, isGroup" // Chat metadata store
 });
 
 export default db;
