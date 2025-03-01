@@ -1,4 +1,3 @@
-
 import verifyEmailHtml from "../../email/EmailTemplate";
 import {transport}from '@/lib/resend'
 
@@ -13,7 +12,7 @@ export async function sendVerificationEmail(
     await transport.sendMail({
         from: 'adarshsharma7p@gmail.com',
         to: `${email}`,
-        subject: 'Youtube-clone',
+        subject: 'Streaming-Sync',
         html:verifyEmailHtml(username,verifyCode),
     });
 

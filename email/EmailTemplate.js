@@ -11,7 +11,7 @@ const verifyEmailHtml = (userName, otp) => `
 
 <div style="max-width: 600px; margin: 0 auto;">
     <!-- Correct Image Path -->
-    <img src="/sync-draw-logo.png" alt="Logo" style="width: 100%; height: auto; border-radius: 8px; margin-bottom: 20px;">
+    <img src="/stream-sync-logo.png" alt="Logo" style="width: 100%; height: auto; border-radius: 8px; margin-bottom: 20px;">
     
     <div style="background-color: #ffffff; border-radius: 8px; padding: 20px;">
         <h2 style="color: #333333; text-align: center;">Verify Your Email Address</h2>

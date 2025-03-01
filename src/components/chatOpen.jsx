@@ -360,7 +360,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
                 )
             );
     
-            // Reply message reset karo
+            // Reply message reset karna
             setReplyMsg({
                 msgId: '',
                 content: ''
@@ -369,7 +369,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
         } catch (error) {
             console.error("Error sending message:", error);
     
-            // Agar fail ho jaye, toh optimistic message remove karo
+            // Agar fail ho jaye, toh optimistic message remove karna
             setMessages((prevMessages) => prevMessages.filter(msg => msg.id !== tempMsgId));
             await db.messages.delete(tempMsgId);
         }
@@ -415,7 +415,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
         );
         setUpdateMsgPopup(false);
     
-        // IndexedDB me bhi update karo (sirf delForMe flag change karenge)
+        // IndexedDB me bhi update karna (sirf delForMe flag change karna)
         await db.messages.update(msgId, { delForMe: true });
     
         // Server request
