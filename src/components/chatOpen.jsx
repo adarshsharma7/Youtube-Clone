@@ -142,43 +142,61 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
         try {
             setHistoryLoading(true);
     
-            // Pehle IndexedDB me check karna
-            const [chatMetadata, cachedMessages] = await Promise.all([
-                db.chats.get(chatId),
-                db.messages.where("chatId").equals(chatId).toArray()
-            ]);
+            // **Step 1: Pehle Metadata aur Messages Parallel Fetch Karna**
+            let chatMetadataPromise = db.chats.get(chatId);
+            let cachedMessagesPromise = db.messages.where("chatId").equals(chatId).toArray();
     
-            if (cachedMessages.length > 0 && chatMetadata) {
-                setMessages(cachedMessages);
-                setUniqueChatId(chatMetadata.uniqueChatId);
-                setIsGroup(chatMetadata.isGroup);
-                setHistoryLoading(false);
-                return;
+            const [chatMetadata, cachedMessages] = await Promise.all([chatMetadataPromise, cachedMessagesPromise]);
+    
+            // **Step 2: Sync Check Pehle Karna (Faster Decision Making)**
+            if (chatMetadata?.sync === false || !chatMetadata) {
+                console.log("Fetching from API due to sync OFF");
+    
+                // **Step 3: API Call Parallelly Start Karo**
+                let apiResponsePromise = axios.get('/api/users/getchathistory', { params: { chatId } });
+    
+                // **Step 4: Agar IndexedDB me kuch hai, toh pehle woh Show Karna**
+                if (cachedMessages.length > 0) {
+                    setMessages(cachedMessages);
+                    setUniqueChatId(chatMetadata?.uniqueChatId || "");
+                    setIsGroup(chatMetadata?.isGroup || false);
+                }
+    
+                // **Step 5: Ab API Response Wait Karna**
+                const response = await apiResponsePromise;
+    
+                if (!response.data.success) {
+                    setError(response.data.message);
+                    return;
+                }
+    
+                const { chatHistory, uniqueChatId, isGroup } = response.data;
+    
+                // **Step 6: API Data ko IndexedDB me Async Store Karna**
+                db.transaction("rw", db.messages, db.chats, async () => {
+                    await db.messages.bulkPut(chatHistory.map(msg => ({
+                        id: msg._id,
+                        chatId: chatId,
+                        ...msg
+                    })));
+                    await db.chats.put({ chatId, uniqueChatId: uniqueChatId.toString(), isGroup, sync: true });
+                }).catch(console.error);
+    
+                setMessages(chatHistory);
+                setUniqueChatId(uniqueChatId.toString());
+                setIsGroup(isGroup);
+    
+            } else {
+                console.log("Fetching from IndexedDB (sync ON)");
+    
+                if (cachedMessages.length > 0) {
+                    setMessages(cachedMessages);
+                    setUniqueChatId(chatMetadata.uniqueChatId);
+                    setIsGroup(chatMetadata.isGroup);
+                } else {
+                    setError("No messages found in IndexedDB");
+                }
             }
-    
-            // Agar cache me nahi mila, toh API call karna
-            const response = await axios.get('/api/users/getchathistory', { params: { chatId } });
-    
-            if (!response.data.success) {
-                setError(response.data.message);
-                return;
-            }
-    
-            const { chatHistory, uniqueChatId, isGroup } = response.data;
-    
-            setMessages(chatHistory);
-            setUniqueChatId(uniqueChatId.toString());
-            setIsGroup(isGroup);
-    
-            // IndexedDB me save karna
-            await Promise.all([
-                db.messages.bulkPut(chatHistory.map(msg => ({
-                    id: msg._id,
-                    chatId: chatId,
-                    ...msg
-                }))),
-                db.chats.put({ chatId, uniqueChatId: uniqueChatId.toString(), isGroup })
-            ]);
     
         } catch (error) {
             setError('Error fetching chat history');
@@ -186,6 +204,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
             setHistoryLoading(false);
         }
     };
+    
     
     useEffect(() => {
         if (!chatId) return;
@@ -228,6 +247,7 @@ function ChatOpen({ avatar, username, chatId, status, setIsChatOpen, setChats, s
             if (msgSenderId !== user._id) {
                 const newMessage = {
                     _id: msgId,
+                    chatId: chatId,
                     edited: false,
                     sender: { _id: chatId, username }, // Yahi exact same structure hona chaiye
                     repliedContent: replyMsg,
